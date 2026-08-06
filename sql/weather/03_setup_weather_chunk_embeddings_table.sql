@@ -1,0 +1,57 @@
+-- Setup script for weather_chunk_embeddings table (CHUNKED embeddings)
+-- Run this manually in your Lakebase Postgres database before running the ingestion script.
+--
+-- Mirrors sql/03_setup_chunk_embeddings_table.sql (ticker_news_chunk_embeddings).
+-- Stores one row per (document chunk): long narrative_text is split with a
+-- sliding window and each chunk gets its own embedding. This is the table used
+-- for high-precision semantic retrieval in POST /weather/search.
+
+-- Enable pgvector extension (already enabled in this Lakebase instance, safe to repeat).
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- VECTOR(384) hardcoded for sentence-transformers/all-MiniLM-L6-v2.
+--   - sentence-transformers/all-MiniLM-L6-v2: 384  <-- used here
+--   - sentence-transformers/all-mpnet-base-v2: 768
+--   - BAAI/bge-small-en-v1.5: 384
+--   - BAAI/bge-base-en-v1.5: 768
+--   - BAAI/bge-large-en-v1.5: 1024
+CREATE TABLE IF NOT EXISTS weather_chunk_embeddings (
+    id           TEXT PRIMARY KEY,
+
+    -- FK to weather_documents.id (the document this chunk came from).
+    document_id  TEXT NOT NULL REFERENCES weather_documents (id) ON DELETE CASCADE,
+
+    -- Denormalized for convenience at query time (mirrors ticker on the news table).
+    location     TEXT NOT NULL,
+
+    -- 0-based index of the chunk within the document.
+    chunk_index  INT NOT NULL,
+
+    -- The exact text that was embedded (one sliding-window chunk).
+    chunk_text   TEXT NOT NULL,
+
+    -- 384-dim embedding of this chunk.
+    embedding    VECTOR(384) NOT NULL,
+
+    model_name   TEXT NOT NULL,
+    embedded_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Prevent duplicate chunks for the same document on re-runs.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_weather_chunk_embeddings_doc_chunk
+ON weather_chunk_embeddings (document_id, chunk_index);
+
+-- HNSW index for fast cosine similarity search (pgvector's <=> operator).
+CREATE INDEX IF NOT EXISTS idx_weather_chunk_embeddings_embedding
+ON weather_chunk_embeddings
+USING hnsw (embedding vector_cosine_ops);
+
+-- Verify the table was created
+SELECT
+    table_name,
+    column_name,
+    data_type,
+    udt_name
+FROM information_schema.columns
+WHERE table_name = 'weather_chunk_embeddings'
+ORDER BY ordinal_position;
