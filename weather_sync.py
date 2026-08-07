@@ -75,7 +75,22 @@ def ensure_weather_documents_table():
     Mirrors ensure_news_table(): this is the RAW document store the weather
     embedding script reads from to compute vectors. DDL matches
     sql/weather/01_setup_weather_documents_table.sql.
+
+    If the table already exists we skip ALL DDL and return. `CREATE INDEX`
+    requires table OWNERSHIP (not merely INSERT/UPDATE grants), so a role that
+    didn't create the table - e.g. when the table was provisioned by
+    sql/weather/01 under a different Postgres identity than the one in
+    LAKEBASE_URL - would hit "must be owner of table weather_documents" here.
+    The setup SQL already creates these indexes, so there is nothing to do when
+    the table is present; we only run DDL when we're the ones creating it (and
+    therefore own it and can index it).
     """
+    exists = lakebase.run_query(
+        "SELECT to_regclass(%s) AS reg", (WEATHER_TABLE_NAME,)
+    )[0]["reg"]
+    if exists:
+        return
+
     lakebase.run_write(
         f"""
         CREATE TABLE IF NOT EXISTS {WEATHER_TABLE_NAME} (
