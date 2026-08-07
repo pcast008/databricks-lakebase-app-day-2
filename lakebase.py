@@ -14,7 +14,6 @@ from contextlib import contextmanager
 import psycopg2
 from databricks.sdk import WorkspaceClient
 from psycopg2.extras import RealDictCursor
-from sqlalchemy import create_engine
 
 _w = WorkspaceClient()
 
@@ -39,7 +38,13 @@ def get_connection():
 
 
 def get_engine():
-    """Return a SQLAlchemy engine for Lakebase."""
+    """Return a SQLAlchemy engine for Lakebase.
+
+    SQLAlchemy is imported lazily so callers that only need the psycopg2 path
+    (get_connection/run_query/run_write) don't require sqlalchemy installed.
+    """
+    from sqlalchemy import create_engine
+
     return create_engine(_lakebase_url())
 
 
