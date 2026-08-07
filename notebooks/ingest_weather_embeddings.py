@@ -227,6 +227,7 @@ try:
         SELECT
             id,
             location,
+            source_type,
             headline,
             issued_at,
             narrative_text,
@@ -280,6 +281,7 @@ for i in range(0, len(docs_df), batch_size):
 embeddings_df = pd.DataFrame({
     "id": docs_df["id"],
     "location": docs_df["location"],
+    "source_type": docs_df["source_type"],
     "headline": docs_df["headline"],
     "issued_at": docs_df["issued_at"],
     "embedding": all_embeddings,
@@ -331,6 +333,7 @@ if len(embeddings_rows) > 0:
             (
                 row['id'],
                 row['location'],
+                row['source_type'],
                 row['headline'],
                 row['issued_at'],
                 '[' + ','.join(str(float(x)) for x in row['embedding']) + ']',
@@ -342,12 +345,12 @@ if len(embeddings_rows) > 0:
 
         insert_sql = f"""
             INSERT INTO {EMBEDDINGS_TABLE_NAME} (
-                id, location, headline, issued_at, embedding, model_name, embedded_at
+                id, location, source_type, headline, issued_at, embedding, model_name, embedded_at
             ) VALUES %s
             ON CONFLICT (id) DO NOTHING
         """
 
-        template = "(%s, %s, %s, %s, %s::vector, %s, %s)"
+        template = "(%s, %s, %s, %s, %s, %s::vector, %s, %s)"
         execute_values(cursor, insert_sql, insert_data, template=template, page_size=100)
 
         conn.commit()
@@ -376,11 +379,12 @@ import pandas as pd
 
 print(f"Chunking {len(docs_df)} narratives (size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})...")
 
-out_document_ids, out_locations, out_chunk_indexes, out_chunk_texts = [], [], [], []
+out_document_ids, out_locations, out_source_types, out_chunk_indexes, out_chunk_texts = [], [], [], [], []
 
 for _, row in docs_df.iterrows():
     document_id = row['id']
     location = row['location']
+    source_type = row['source_type']
     text = (row['narrative_text'] or '').strip()
     if not text:
         continue
@@ -391,6 +395,7 @@ for _, row in docs_df.iterrows():
             continue
         out_document_ids.append(document_id)
         out_locations.append(location)
+        out_source_types.append(source_type)
         out_chunk_indexes.append(chunk_index)
         out_chunk_texts.append(chunk_text)
         if start + CHUNK_SIZE >= len(text):
@@ -399,6 +404,7 @@ for _, row in docs_df.iterrows():
 chunks_df = pd.DataFrame({
     "document_id": out_document_ids,
     "location": out_locations,
+    "source_type": out_source_types,
     "chunk_index": out_chunk_indexes,
     "chunk_text": out_chunk_texts,
 })
@@ -444,6 +450,7 @@ for i in range(0, len(chunks_df), batch_size):
 chunk_embeddings_df = pd.DataFrame({
     "document_id": chunks_df["document_id"],
     "location": chunks_df["location"],
+    "source_type": chunks_df["source_type"],
     "chunk_index": chunks_df["chunk_index"],
     "chunk_text": chunks_df["chunk_text"],
     "embedding": all_chunk_embeddings,
@@ -495,6 +502,7 @@ if len(chunk_embeddings_rows) > 0:
                 row['id'],
                 row['document_id'],
                 row['location'],
+                row['source_type'],
                 int(row['chunk_index']),
                 row['chunk_text'],
                 '[' + ','.join(str(float(x)) for x in row['embedding']) + ']',
@@ -506,12 +514,12 @@ if len(chunk_embeddings_rows) > 0:
 
         insert_sql = f"""
             INSERT INTO {CHUNK_EMBEDDINGS_TABLE_NAME} (
-                id, document_id, location, chunk_index, chunk_text, embedding, model_name, embedded_at
+                id, document_id, location, source_type, chunk_index, chunk_text, embedding, model_name, embedded_at
             ) VALUES %s
             ON CONFLICT (id) DO NOTHING
         """
 
-        template = "(%s, %s, %s, %s, %s, %s::vector, %s, %s)"
+        template = "(%s, %s, %s, %s, %s, %s, %s::vector, %s, %s)"
         execute_values(cursor, insert_sql, insert_data, template=template, page_size=100)
 
         conn.commit()
