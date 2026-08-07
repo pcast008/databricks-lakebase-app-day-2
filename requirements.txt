@@ -5,3 +5,6 @@ sqlalchemy>=2.0.30
 flask>=3.0.3
 requests>=2.32.3
 python-dotenv>=1.0.1
+# Used by POST /weather/search to embed the query string with the same model
+# (sentence-transformers/all-MiniLM-L6-v2, 384-dim) used at ingestion time.
+sentence-transformers>=2.7.0

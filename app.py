@@ -31,6 +31,38 @@ TABLE_NAME = os.environ.get("MASSIVE_TABLE_NAME", "massive_records")
 WATCHLIST_TABLE_NAME = os.environ.get("WATCHLIST_TABLE_NAME", "watchlist")
 NEWS_TABLE_NAME = os.environ.get("NEWS_TABLE_NAME", "ticker_news_documents")
 
+# Weather semantic-search config (POST /weather/search). The chunk-embeddings
+# table is the retrieval target (one vector per sliding-window passage); we JOIN
+# back to the raw documents table for headline/narrative_text. The embedding
+# model MUST match the one used at ingestion time in
+# notebooks/ingest_weather_embeddings.py so query and stored vectors are comparable.
+WEATHER_DOCUMENTS_TABLE = os.environ.get("WEATHER_DOCUMENTS_TABLE", "weather_documents")
+WEATHER_CHUNK_EMBEDDINGS_TABLE = os.environ.get(
+    "WEATHER_CHUNK_EMBEDDINGS_TABLE", "weather_chunk_embeddings"
+)
+WEATHER_EMBEDDING_MODEL = os.environ.get(
+    "WEATHER_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+)
+# Valid source_type filter values (multi-source retrieval, extra credit).
+VALID_WEATHER_SOURCE_TYPES = {"alert", "forecast", "hourly"}
+
+# Lazily-loaded singleton so the (heavy) sentence-transformers model is loaded
+# ONCE for the app's lifetime and reused across requests - never per-request.
+# Loading lazily (on first /weather/search) rather than at import keeps app
+# startup fast and avoids a boot failure if the model download is slow.
+_embedding_model = None
+
+
+def _get_embedding_model():
+    """Load (once) and return the sentence-transformers model used to embed queries."""
+    global _embedding_model
+    if _embedding_model is None:
+        from sentence_transformers import SentenceTransformer
+
+        logger.info("Loading embedding model %s (first use)...", WEATHER_EMBEDDING_MODEL)
+        _embedding_model = SentenceTransformer(WEATHER_EMBEDDING_MODEL)
+    return _embedding_model
+
 # Tickers to fetch news for by default (comma-separated), e.g. "AAPL,MSFT,GOOGL"
 DEFAULT_NEWS_TICKERS = [
     t.strip().upper()
@@ -219,6 +251,85 @@ def sync_weather_from_nws():
     states = parse_states(body.get("states") or body.get("locations"))
     limit = int(body.get("limit", 50))
     return jsonify(sync_weather(states=states, limit=limit))
+
+
+@app.route("/weather/search", methods=["POST"])
+def search_weather():
+    """
+    POST /weather/search - cosine-similarity semantic search over weather chunks.
+
+    Body (JSON):
+        {"query": "risk of flooding near rivers", "top_k": 5, "source_type": "alert"}
+
+    - query (required): natural-language text. Embedded with the SAME model used
+      at ingestion (_get_embedding_model) and compared against
+      weather_chunk_embeddings.embedding via pgvector's <=> cosine operator.
+    - top_k (optional, default 5): number of matches, clamped to 1..20.
+    - source_type (optional): "alert" | "forecast" | "hourly" restricts retrieval
+      to one source (multi-source extra credit). Omit to search across all sources.
+
+    Returns {"results": [...]} ranked by similarity (1 - cosine distance), each
+    row with id, location, headline, narrative_text, chunk_text, source_type,
+    similarity. An unseeded/empty embeddings table simply yields an empty list.
+    """
+    body = request.json if request.is_json else {}
+
+    query = body.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return jsonify({"error": "Request body must include a non-empty 'query' string"}), 400
+    query = query.strip()
+
+    # Clamp top_k to a sane range (default 5).
+    try:
+        top_k = int(body.get("top_k", 5))
+    except (TypeError, ValueError):
+        return jsonify({"error": "'top_k' must be an integer"}), 400
+    top_k = max(1, min(top_k, 20))
+
+    # Optional source_type filter (extra credit: multi-source retrieval).
+    source_type = body.get("source_type")
+    if source_type is not None:
+        if (
+            not isinstance(source_type, str)
+            or source_type.strip().lower() not in VALID_WEATHER_SOURCE_TYPES
+        ):
+            return jsonify({
+                "error": f"'source_type' must be one of {sorted(VALID_WEATHER_SOURCE_TYPES)}"
+            }), 400
+        source_type = source_type.strip().lower()
+
+    # Embed the query with the same model as ingestion, then format it as a
+    # pgvector literal ('[v1,v2,...]') for the ::vector cast in SQL.
+    model = _get_embedding_model()
+    vector = model.encode(query).tolist()
+    vector_literal = "[" + ",".join(str(float(x)) for x in vector) + "]"
+
+    # The vector literal appears twice (similarity in SELECT + ORDER BY), with the
+    # optional source_type filter between them. source_type is denormalized onto
+    # the chunk table, so filtering needs no extra join.
+    where_clause = "WHERE e.source_type = %s" if source_type else ""
+    sql = f"""
+        SELECT d.id, d.location, d.headline, d.narrative_text,
+               e.chunk_text, e.source_type,
+               1 - (e.embedding <=> %s::vector) AS similarity
+        FROM {WEATHER_CHUNK_EMBEDDINGS_TABLE} e
+        JOIN {WEATHER_DOCUMENTS_TABLE} d ON d.id = e.document_id
+        {where_clause}
+        ORDER BY e.embedding <=> %s::vector
+        LIMIT %s
+    """
+    params = [vector_literal]
+    if source_type:
+        params.append(source_type)
+    params.extend([vector_literal, top_k])
+
+    results = lakebase.run_query(sql, tuple(params))
+    return jsonify({
+        "query": query,
+        "source_type": source_type,
+        "top_k": top_k,
+        "results": results,
+    })
 
 
 @app.route("/watchlist", methods=["GET"])
