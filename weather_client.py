@@ -84,16 +84,18 @@ class WeatherClient:
     ) -> list[dict]:
         """GET /alerts/active. Pass `area='IL'` (a state/marine code) OR
         `point='lat,lon'`. Returns the raw GeoJSON `features` list; each
-        feature's `properties` has the free-text description + instruction."""
+        feature's `properties` has the free-text description + instruction.
+
+        NOTE: /alerts/active does NOT accept a `limit` query param - sending one
+        returns HTTP 400. We apply `limit` client-side by slicing the results."""
         params: dict[str, Any] = {}
         if area:
             params["area"] = area
         if point:
             params["point"] = point
-        if limit:
-            params["limit"] = limit
         data = self.get("/alerts/active", params=params or None)
-        return data.get("features", []) or []
+        features = data.get("features", []) or []
+        return features[:limit] if limit else features
 
     def get_forecast(self, office: str, grid_x: int, grid_y: int) -> list[dict]:
         """GET /gridpoints/{office}/{x},{y}/forecast -> the `periods` list. Each

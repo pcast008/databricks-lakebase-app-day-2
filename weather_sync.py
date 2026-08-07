@@ -164,6 +164,7 @@ def sync_weather(states: list[str] | None = None, limit: int = 50) -> dict:
     client = WeatherClient()
 
     states = states or DEFAULT_WEATHER_STATES
+    logger.info("Weather sync starting for states %s (limit=%d)", states, limit)
 
     rows: list[dict] = []
     seen_ids: set[str] = set()
@@ -176,9 +177,13 @@ def sync_weather(states: list[str] | None = None, limit: int = 50) -> dict:
     for state in states:
         try:
             alerts = client.get_active_alerts(area=state, limit=limit)
-        except requests.HTTPError:
-            logger.warning("Failed to fetch active alerts for %s", state)
+        except requests.HTTPError as exc:
+            logger.warning("Failed to fetch active alerts for %s: %s", state, exc)
             continue
+        logger.info(
+            "%s: %d active alerts (expanding up to %d forecast grids)",
+            state, len(alerts), WEATHER_MAX_GRIDS_PER_STATE,
+        )
 
         seen_grids: set[tuple] = set()
         for feature in alerts:
@@ -203,9 +208,15 @@ def sync_weather(states: list[str] | None = None, limit: int = 50) -> dict:
                     _add(normalize_forecast_period(location, period))
                 for period in client.get_hourly_forecast(*grid):
                     _add(normalize_hourly_period(location, period))
-            except requests.HTTPError:
-                logger.warning("Forecast leg failed near %s in %s", centroid, state)
+                logger.info(
+                    "  %s grid %s (%s): %d docs so far",
+                    state, grid, location, len(rows),
+                )
+            except requests.HTTPError as exc:
+                logger.warning("Forecast leg failed near %s in %s: %s", centroid, state, exc)
                 continue
 
+    logger.info("Harvested %d unique docs; upserting into weather_documents ...", len(rows))
     total = _upsert_weather_batch(rows)
+    logger.info("Weather sync done: %d rows upserted", total)
     return {"synced": total, "states": states, "documents": len(rows)}

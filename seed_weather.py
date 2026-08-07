@@ -21,10 +21,15 @@ Env:
     WEATHER_MAX_GRIDS_PER_STATE forecast grid cells expanded per state (default 5)
 """
 
+import logging
 import os
 import sys
 
 from weather_sync import sync_weather
+
+# Surface weather_sync's INFO progress logs (the notebook/module path doesn't
+# configure logging otherwise, so without this the harvest looks silent/hung).
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 LIMIT = int(os.environ.get("WEATHER_SYNC_LIMIT", 50))
 
