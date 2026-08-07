@@ -2,8 +2,9 @@
 Seed weather_documents by running the NWS harvest directly against Lakebase.
 
 Self-contained: this is the ONLY thing you run. It imports sync_weather() from
-app.py and calls it in-process, so you do NOT need `python app.py` (or any
-server) running. Same code path the POST /weather/sync route uses.
+weather_sync.py (which does NOT import Flask) and calls it in-process, so you do
+NOT need `python app.py`, a running server, or Flask installed. Same code path
+the POST /weather/sync route uses.
 
 The harvest is state/area-driven: it pulls active NWS alerts for each state,
 then follows each alert to its forecast grid cell for the daily + hourly
@@ -23,7 +24,7 @@ Env:
 import os
 import sys
 
-from app import sync_weather
+from weather_sync import sync_weather
 
 LIMIT = int(os.environ.get("WEATHER_SYNC_LIMIT", 50))
 
